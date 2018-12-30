@@ -61,12 +61,25 @@ private:
         float size_x, float size_y, float size_z, 
         float color_r, float color_g, float color_b);
 
+
+  // CONSTANTS
+
+  const char*   DEFAULT_TARGET_FRAME = "base_link";     // TF frame for sensors
+  const double  DEFAULT_TF_TOLERANCE = 0.05;            // TF latency tolerance
+  const char*   DEFAULT_DEPTH_TOPIC = "/camera/depth";  
+  //const char*   DEFAULT_COLOR_TOPIC = "/camera/color";  
+
+
   // VARIABLES
   ros::NodeHandle                 nh_;
+  ros::NodeHandle                 private_nh_;
   tf2_ros::Buffer                 tf2_;
   tf2_ros::TransformListener      tfListener_;
   std::string                     input_cloud_frame_;
-  std::string                     base_cloud_frame_;
+  std::string                     target_frame_;
+  double                          tf_tolerance_;
+  std::string                     depth_topic_;
+  //std::string                     color_topic_;
 
 
   // SUBSCRIBERS
@@ -96,14 +109,20 @@ private:
 
 PclObjectDetection::PclObjectDetection(ros::NodeHandle n) : 
   nh_(n),
-  //private_nh_("~"),
+  private_nh_("~"),
   tfListener_(tf2_),
-  input_cloud_frame_(""),
-  base_cloud_frame_("")
+  input_cloud_frame_("")
 {
 
   ROS_INFO("PclObjectDetection: Initializing...");
 
+  // PARAMETERS
+  // TODO USE THESE IN CODE
+  private_nh_.param<std::string>("target_frame", target_frame_, DEFAULT_TARGET_FRAME); 
+  private_nh_.param<double>("transform_tolerance", tf_tolerance_, DEFAULT_TF_TOLERANCE); 
+  private_nh_.param<std::string>("depth_topic", depth_topic_, DEFAULT_DEPTH_TOPIC);
+  //private_nh_.param<std::string>("color_topic", color_topic_, DEFAULT_COLOR_TOPIC);
+  
 
   // PUBLISHERS
   // Create a ROS publisher for the output point cloud
@@ -135,7 +154,7 @@ PclObjectDetection::PclObjectDetection(ros::NodeHandle n) :
   // SUBSCRIBERS
   // Create a ROS subscriber for the input point cloud
   depth_cloud_sub_ = nh_.subscribe 
-    ("/camera/points", 1, &PclObjectDetection::cloud_cb, this);
+    (depth_topic_, 1, &PclObjectDetection::cloud_cb, this);
 
 
 }
@@ -146,7 +165,6 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
 
   input_cloud_frame_ = input_cloud_msg->header.frame_id; // TF Frame of the point cloud
   // std::cout << "DEBUG Cloud Frame = [" << input_cloud_frame_ << "]" << std::endl;
-  base_cloud_frame_ = "base_link";
   
  // CLOUD DATA STRUCTURES
   pcl::PCLPointCloud2::Ptr  
@@ -378,13 +396,13 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
         sensor_msgs::PointCloud2Ptr cloud_rotated_msg;
         pcl::PCLPointCloud2 pcl2_rotated_cluster; 
         pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_rotated_cluster_XYZ (new pcl::PointCloud<pcl::PointXYZ>);
-        double  tf_tolerance_ = 0.05; 
+        //double  tf_tolerance_ = 0.05; 
         pcl::PointXYZ minPt, maxPt, bb_size, obj_center;
         
         try
         {
           cloud_rotated_msg.reset(new sensor_msgs::PointCloud2);
-          tf2_.transform(*output, *cloud_rotated_msg, base_cloud_frame_, ros::Duration(tf_tolerance_));
+          tf2_.transform(*output, *cloud_rotated_msg, target_frame_, ros::Duration(tf_tolerance_));
 
           // Convert from ROS to PCL2 cloud
           pcl_conversions::toPCL(*cloud_rotated_msg, pcl2_rotated_cluster);
@@ -438,7 +456,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
               pub_cluster0.publish (cloud_rotated_msg);   // Publish the data cluster cloud
 
               PclObjectDetection::PublishMarkerBox(       // Publish the bounding box as a marker
-                base_cloud_frame_,                        // Transform Frame from camera to robot base
+                target_frame_,                        // Transform Frame from camera to robot base
                 j,                                        // Marker ID
                 obj_center.x, obj_center.y, obj_center.z, // Object Center 
                 bb_size.x, bb_size.y, bb_size.z,          // Object Size
@@ -449,7 +467,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
               pub_cluster1.publish (cloud_rotated_msg); 
 
               PclObjectDetection::PublishMarkerBox(     
-                base_cloud_frame_,    
+                target_frame_,    
                 j, 
                 obj_center.x, obj_center.y, obj_center.z,   
                 bb_size.x, bb_size.y, bb_size.z,            
@@ -460,7 +478,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
               pub_cluster2.publish (cloud_rotated_msg); 
 
               PclObjectDetection::PublishMarkerBox(     
-                base_cloud_frame_,    
+                target_frame_,    
                 j, 
                 obj_center.x, obj_center.y, obj_center.z,   
                 bb_size.x, bb_size.y, bb_size.z,            
@@ -471,7 +489,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
               pub_cluster3.publish (cloud_rotated_msg); 
 
               PclObjectDetection::PublishMarkerBox(     
-                base_cloud_frame_,    
+                target_frame_,    
                 j, 
                 obj_center.x, obj_center.y, obj_center.z,   
                 bb_size.x, bb_size.y, bb_size.z,            
@@ -482,7 +500,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
               pub_cluster4.publish (cloud_rotated_msg); 
 
               PclObjectDetection::PublishMarkerBox(     
-                base_cloud_frame_,    
+                target_frame_,    
                 j, 
                 obj_center.x, obj_center.y, obj_center.z,   
                 bb_size.x, bb_size.y, bb_size.z,            
@@ -493,7 +511,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
               pub_cluster5.publish (cloud_rotated_msg); 
 
               PclObjectDetection::PublishMarkerBox(     
-                base_cloud_frame_,    
+                target_frame_,    
                 j, 
                 obj_center.x, obj_center.y, obj_center.z,   
                 bb_size.x, bb_size.y, bb_size.z,            

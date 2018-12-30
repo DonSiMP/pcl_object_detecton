@@ -1,5 +1,14 @@
+<!-- PCL Object Detection example launch file 
+     copy to your robot launch file, and modify as needed
+-->
+
 <launch>
   <node pkg="pcl_object_detection" type="pcl_object_detection_node" name="pcl_object_detection_node" output="screen">
+
+    <param name="target_frame" value="base_link"/>
+    <param name="transform_tolerance" value="0.01"/>
+    <param name="depth_topic" value="/camera/depth_cloud"/>
+  
  
   </node>
 
