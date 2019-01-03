@@ -138,17 +138,17 @@ PclObjectDetection::PclObjectDetection(ros::NodeHandle n) :
   pub2 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/plane2", 1);
   pub3 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/plane3", 1);
   pub4 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/plane4", 1);
-  pub5 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/plane5", 1);
+  pub5 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/voxel_output", 1);
 
   pub_remaining = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/remaining", 1);
   pub_objects = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/objects", 1);
 
   // Create a ROS publisher for the output model coefficients
-  //pub = nh_.advertise<pcl_msgs::ModelCoefficients> ("pcl_test/segment_plane", 1);
+  //pub = nh_.advertise<pcl_msgs::ModelCoefficients> ("pcl_object_detection/segment_plane", 1);
 
   // Publish markers to show where robot thinks object is in RViz
   marker_pub_ = nh_.advertise<visualization_msgs::Marker>
-    ("pcl_test/marker", 1);
+    ("pcl_object_detection/marker", 1);
 
 
   // SUBSCRIBERS
@@ -165,6 +165,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
 
   input_cloud_frame_ = input_cloud_msg->header.frame_id; // TF Frame of the point cloud
   // std::cout << "DEBUG Cloud Frame = [" << input_cloud_frame_ << "]" << std::endl;
+
   
  // CLOUD DATA STRUCTURES
   pcl::PCLPointCloud2::Ptr  
@@ -186,21 +187,26 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
 
   // Perform the actual filtering
   pcl::VoxelGrid<pcl::PCLPointCloud2> sor;
-  sor.setInputCloud (pcl2_input_cloud_p);
+  sor.setInputCloud (pcl2_input_cloud_p); 
   sor.setLeafSize (0.01, 0.01, 0.01);
-  sor.setFilterFieldName ("z");
-  sor.setFilterLimits (0.1, 1.5);
+  
+  // Don't filter on z values, we loose data!  Let the plan and cluster handle it!
+  //sor.setFilterFieldName ("z");
+  //sor.setFilterLimits (-0.5, 1.5); // Default: 0.1, 1.5
   sor.setDownsampleAllData (false);
   sor.filter (cloud_filtered2);
 
-  // Convert the sensor_msgs/PointCloud2 data to pcl/PointCloud
-  //pcl::PointCloud<pcl::PointXYZ> cloud_filtered;
-  //pcl::fromROSMsg (cloud_filtered2, cloud_filtered);
-  
+
+  sensor_msgs::PointCloud2 voxel_output;
+  pcl_conversions::fromPCL(cloud_filtered2, voxel_output);
+  //pcl_conversions::fromPCL(*pcl2_input_cloud, voxel_output);
+  pub5.publish (voxel_output); // Output after the Voxel Filter is applied
+
   // Convert from PCL2 to PCL XYZ cloud?
   pcl::fromPCLPointCloud2(cloud_filtered2, *downsampled_XYZ);
 
-  //std::cout << "PointCloud after filtering: " << downsampled_XYZ->width * downsampled_XYZ->height << " data points." << std::endl;
+  //std::cout << "PointCloud after filtering: " << 
+  //  downsampled_XYZ->width * downsampled_XYZ->height << " data points." << std::endl;
 
   // Segment the Plane (Floor)  ... (or Tabletop??? TODO)
   pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients ());
@@ -213,7 +219,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
   seg.setMaxIterations (1000);
-  seg.setDistanceThreshold (0.02);
+  seg.setDistanceThreshold (0.025); // 0.02
 
   // Create the filtering object
   pcl::ExtractIndices<pcl::PointXYZ> extract;
@@ -366,7 +372,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
 
     std::vector<pcl::PointIndices> cluster_indices;
     pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
-    ec.setClusterTolerance (0.050); // 50 millimeters
+    ec.setClusterTolerance (0.05); // 5 cm
     ec.setMinClusterSize (100);
     ec.setMaxClusterSize (25000);
     ec.setSearchMethod (tree);
@@ -425,15 +431,6 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
           bb_size.y = maxPt.y - minPt.y;
           bb_size.z = maxPt.z - minPt.z;
 
-          // Filter object size
-          if( (maxPt.z   < 0.020) ||    // Min heigth of object is below noise floor
-              (bb_size.z < 0.030) ||    // Min heigth of object
-              (maxPt.z   > 0.200) ||    // Max heigth of object
-              (minPt.z   > 0.040) )     // bottom of object
-          {
-            continue; // Skip objects that don't meet size criteria (could be a wall, etc.)
-          }
-
           obj_center.x = minPt.x + (bb_size.x / 2);
           obj_center.y = minPt.y + (bb_size.y / 2);
           obj_center.z = minPt.z + (bb_size.z / 2);
@@ -446,8 +443,32 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
             << ", w: " << bb_size.y 
             << ", h: " << bb_size.z 
             << ", top: " << maxPt.z 
-            << ", bottom: " << minPt.z                             
-            << std::endl;
+            << ", bottom: " << minPt.z;                             
+            
+
+          if(bb_size.z < 0.020)
+          {
+            std::cout << " FAIL: Object too short" << std::endl;
+            ++j;
+            continue;
+          }
+          else if(bb_size.z > 0.090)
+          {
+            std::cout << " FAIL: Object too tall" << std::endl;
+            ++j;
+            continue;
+          }
+          /*
+          else if(minPt.z > 0.070)
+          {
+            std::cout << " FAIL: Bottom of Object too high" << std::endl;
+            ++j;
+            continue;
+          }
+          */
+          
+
+          std::cout << " PASS" << std::endl;
             
           if(j < 6)
           {
@@ -456,7 +477,7 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
               pub_cluster0.publish (cloud_rotated_msg);   // Publish the data cluster cloud
 
               PclObjectDetection::PublishMarkerBox(       // Publish the bounding box as a marker
-                target_frame_,                        // Transform Frame from camera to robot base
+                target_frame_,                       // Transform Frame from camera to robot base
                 j,                                        // Marker ID
                 obj_center.x, obj_center.y, obj_center.z, // Object Center 
                 bb_size.x, bb_size.y, bb_size.z,          // Object Size
