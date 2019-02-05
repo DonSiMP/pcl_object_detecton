@@ -91,7 +91,7 @@ private:
   ros::Publisher pub_cluster2;
   ros::Publisher pub_cluster3;
   ros::Publisher pub_cluster4;
-  ros::Publisher pub_cluster5;
+  ros::Publisher pub_nearest_object;
 
   ros::Publisher pub0;
   ros::Publisher pub1;
@@ -131,7 +131,7 @@ PclObjectDetection::PclObjectDetection(ros::NodeHandle n) :
   pub_cluster2 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/cluster2", 1);
   pub_cluster3 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/cluster3", 1);
   pub_cluster4 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/cluster4", 1);
-  pub_cluster5 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/cluster5", 1);
+  pub_nearest_object = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/nearest_object", 1);
 
   pub0 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/plane0", 1);
   pub1 = nh_.advertise<sensor_msgs::PointCloud2> ("pcl_object_detection/plane1", 1);
@@ -363,6 +363,8 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
 
   // Look for object Clusters
 
+
+
   if( (downsampled_XYZ->width > 0) && (downsampled_XYZ->height > 0) )
   {
  
@@ -372,183 +374,239 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
 
     std::vector<pcl::PointIndices> cluster_indices;
     pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
-    ec.setClusterTolerance (0.05); // 5 cm
+    // ClusterTolerance: too small and object can be seen as multiple clusters. 
+    // too high and multiple objects are seen as one cluster.
+    ec.setClusterTolerance (0.04); // 4 cm
     ec.setMinClusterSize (100);
     ec.setMaxClusterSize (25000);
     ec.setSearchMethod (tree);
     ec.setInputCloud (downsampled_XYZ);
     ec.extract (cluster_indices);
 
+    // Nearest object
+    sensor_msgs::PointCloud2Ptr nearest_object_cloud_msg;
+    int nearest_object_index = -1;
+    float nearest_object_weighted_distance = 10000.0;
+    pcl::PointXYZ nearest_obj_minPt, nearest_obj_maxPt, nearest_obj_bb_size, nearest_obj_center;
+
+
     int j = 0;
     for (std::vector<pcl::PointIndices>::const_iterator it = cluster_indices.begin (); it != cluster_indices.end (); ++it)
     {
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_cluster (new pcl::PointCloud<pcl::PointXYZ>);
-        for (std::vector<int>::const_iterator pit = it->indices.begin (); pit != it->indices.end (); pit++)
-            cloud_cluster->points.push_back (downsampled_XYZ->points[*pit]);
+      pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_cluster (new pcl::PointCloud<pcl::PointXYZ>);
+      for (std::vector<int>::const_iterator pit = it->indices.begin (); pit != it->indices.end (); pit++)
+          cloud_cluster->points.push_back (downsampled_XYZ->points[*pit]);
 
-        cloud_cluster->width = cloud_cluster->points.size();
-        cloud_cluster->height = 1;
-        cloud_cluster->is_dense = true;
+      cloud_cluster->width = cloud_cluster->points.size();
+      cloud_cluster->height = 1;
+      cloud_cluster->is_dense = true;
 
-        // std::cout << "Cluster: " << j << " : " 
-        //  << cloud_cluster->points.size() << " data points." << std::endl;
-        
-        //Convert the pointcloud to be used in ROS
-        sensor_msgs::PointCloud2::Ptr output (new sensor_msgs::PointCloud2);
-        pcl::toROSMsg (*cloud_cluster, *output);
-        output->header.frame_id = input_cloud_frame_;
- 
-        // Rotate the clusters found
-        sensor_msgs::PointCloud2Ptr cloud_rotated_msg;
-        pcl::PCLPointCloud2 pcl2_rotated_cluster; 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_rotated_cluster_XYZ (new pcl::PointCloud<pcl::PointXYZ>);
-        //double  tf_tolerance_ = 0.05; 
-        pcl::PointXYZ minPt, maxPt, bb_size, obj_center;
-        
-        try
-        {
-          cloud_rotated_msg.reset(new sensor_msgs::PointCloud2);
-          tf2_.transform(*output, *cloud_rotated_msg, target_frame_, ros::Duration(tf_tolerance_));
+      // std::cout << "Cluster: " << j << " : " 
+      //  << cloud_cluster->points.size() << " data points." << std::endl;
+      
+      //Convert the pointcloud to be used in ROS
+      sensor_msgs::PointCloud2::Ptr output (new sensor_msgs::PointCloud2);
+      pcl::toROSMsg (*cloud_cluster, *output);
+      output->header.frame_id = input_cloud_frame_;
 
-          // Convert from ROS to PCL2 cloud
-          pcl_conversions::toPCL(*cloud_rotated_msg, pcl2_rotated_cluster);
-          // Convert from PCL2 to PCL XYZ cloud? (surely there is a better way!?)
-          pcl::fromPCLPointCloud2(pcl2_rotated_cluster, *pcl_rotated_cluster_XYZ);
+      // Rotate the clusters found
+      sensor_msgs::PointCloud2Ptr cloud_rotated_msg;
+      pcl::PCLPointCloud2 pcl2_rotated_cluster; 
+      pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_rotated_cluster_XYZ (new pcl::PointCloud<pcl::PointXYZ>);
+      //double  tf_tolerance_ = 0.05; 
+      pcl::PointXYZ minPt, maxPt, bb_size, obj_center;
+      
+      try
+      {
+        cloud_rotated_msg.reset(new sensor_msgs::PointCloud2);
+        tf2_.transform(*output, *cloud_rotated_msg, target_frame_, ros::Duration(tf_tolerance_));
 
-          // Find bounding box of rotated cluster
-          pcl::getMinMax3D (*pcl_rotated_cluster_XYZ, minPt, maxPt);
-          /*
-          std::cout << "CLUSTER [" << j << "] : "
-            << "Max x: " << maxPt.x 
-            << ", y: " << maxPt.y 
-            << ", z: " << maxPt.z 
-            << "    Min x: " << minPt.x 
-            << ", y: " << minPt.y 
-            << ", z: " << minPt.z << std::endl;
-          */
-            
-          bb_size.x = maxPt.x - minPt.x;
-          bb_size.y = maxPt.y - minPt.y;
-          bb_size.z = maxPt.z - minPt.z;
+        // Convert from ROS to PCL2 cloud
+        pcl_conversions::toPCL(*cloud_rotated_msg, pcl2_rotated_cluster);
+        // Convert from PCL2 to PCL XYZ cloud? (surely there is a better way!?)
+        pcl::fromPCLPointCloud2(pcl2_rotated_cluster, *pcl_rotated_cluster_XYZ);
 
-          obj_center.x = minPt.x + (bb_size.x / 2);
-          obj_center.y = minPt.y + (bb_size.y / 2);
-          obj_center.z = minPt.z + (bb_size.z / 2);
+        // Find bounding box of rotated cluster
+        pcl::getMinMax3D (*pcl_rotated_cluster_XYZ, minPt, maxPt);
+        /*
+        std::cout << "CLUSTER [" << j << "] : "
+          << "Max x: " << maxPt.x 
+          << ", y: " << maxPt.y 
+          << ", z: " << maxPt.z 
+          << "    Min x: " << minPt.x 
+          << ", y: " << minPt.y 
+          << ", z: " << minPt.z << std::endl;
+        */
+          
+        bb_size.x = maxPt.x - minPt.x;
+        bb_size.y = maxPt.y - minPt.y;
+        bb_size.z = maxPt.z - minPt.z;
 
-          std::cout << "OBJECT [" << j << "] : "
-            << "  x: " << obj_center.x
-            << ", y: " << obj_center.y 
-            << ", z: " << obj_center.z               
-            << ", l: " << bb_size.x 
-            << ", w: " << bb_size.y 
-            << ", h: " << bb_size.z 
-            << ", top: " << maxPt.z 
-            << ", bottom: " << minPt.z;                             
-            
+        obj_center.x = minPt.x + (bb_size.x / 2);
+        obj_center.y = minPt.y + (bb_size.y / 2);
+        obj_center.z = minPt.z + (bb_size.z / 2);
 
-          if(bb_size.z < 0.020)
-          {
-            std::cout << " FAIL: Object too short" << std::endl;
-            ++j;
-            continue;
-          }
-          else if(bb_size.z > 0.090)
-          {
-            std::cout << " FAIL: Object too tall" << std::endl;
-            ++j;
-            continue;
-          }
-          /*
-          else if(minPt.z > 0.070)
-          {
-            std::cout << " FAIL: Bottom of Object too high" << std::endl;
-            ++j;
-            continue;
-          }
-          */
+        /*
+        std::cout << "OBJECT [" << j << "] : "
+          << "  x: " << obj_center.x
+          << ", y: " << obj_center.y 
+          << ", z: " << obj_center.z               
+          << ", l: " << bb_size.x 
+          << ", w: " << bb_size.y 
+          << ", h: " << bb_size.z 
+          << ", top: " << maxPt.z 
+          << ", bottom: " << minPt.z; 
+        */                            
           
 
-          std::cout << " PASS" << std::endl;
-            
-          if(j < 6)
-          {
-            if(j == 0)
-            {
-              pub_cluster0.publish (cloud_rotated_msg);   // Publish the data cluster cloud
-
-              PclObjectDetection::PublishMarkerBox(       // Publish the bounding box as a marker
-                target_frame_,                       // Transform Frame from camera to robot base
-                j,                                        // Marker ID
-                obj_center.x, obj_center.y, obj_center.z, // Object Center 
-                bb_size.x, bb_size.y, bb_size.z,          // Object Size
-                1.0, 0.0, 0.0 ); // Red                   // r,g,b - different for each marker
-            }
-            else if(j == 1)
-            {
-              pub_cluster1.publish (cloud_rotated_msg); 
-
-              PclObjectDetection::PublishMarkerBox(     
-                target_frame_,    
-                j, 
-                obj_center.x, obj_center.y, obj_center.z,   
-                bb_size.x, bb_size.y, bb_size.z,            
-                0.0, 1.0, 0.0 ); // Green
-            }
-            else if(j == 2)
-            {
-              pub_cluster2.publish (cloud_rotated_msg); 
-
-              PclObjectDetection::PublishMarkerBox(     
-                target_frame_,    
-                j, 
-                obj_center.x, obj_center.y, obj_center.z,   
-                bb_size.x, bb_size.y, bb_size.z,            
-                1.0, 0.0, 1.0 ); // Light Purple
-            }
-            else if(j == 3)
-            {
-              pub_cluster3.publish (cloud_rotated_msg); 
-
-              PclObjectDetection::PublishMarkerBox(     
-                target_frame_,    
-                j, 
-                obj_center.x, obj_center.y, obj_center.z,   
-                bb_size.x, bb_size.y, bb_size.z,            
-                1.0, 1.0, 0.0 ); // Yellow
-            }
-            else if(j == 4)
-            {
-              pub_cluster4.publish (cloud_rotated_msg); 
-
-              PclObjectDetection::PublishMarkerBox(     
-                target_frame_,    
-                j, 
-                obj_center.x, obj_center.y, obj_center.z,   
-                bb_size.x, bb_size.y, bb_size.z,            
-                0.0, 1.0, 1.0 ); // Aqua
-            }
-            else if(j == 5)
-            {
-              pub_cluster5.publish (cloud_rotated_msg); 
-
-              PclObjectDetection::PublishMarkerBox(     
-                target_frame_,    
-                j, 
-                obj_center.x, obj_center.y, obj_center.z,   
-                bb_size.x, bb_size.y, bb_size.z,            
-                0.5, 0.0, 0.5 ); // Dark Purple
-            }
-          }       
-              
-        }
-        catch (tf2::TransformException &ex)
+        if(bb_size.z < 0.020)
         {
-          ROS_WARN_STREAM("Transform failure: " << ex.what());
-          break;
+          std::cout << " FAIL: Object too short" << std::endl;
+          ++j;
+          continue;
         }
+        else if(bb_size.z > 0.090)
+        {
+          std::cout << " FAIL: Object too tall" << std::endl;
+          ++j;
+          continue;
+        }
+        /*
+        else if(minPt.z > 0.070)
+        {
+          std::cout << " FAIL: Bottom of Object too high" << std::endl;
+          ++j;
+          continue;
+        }
+        */
         
-        ++j;
+
+        std::cout << " PASS" << std::endl;
+        const int PICKUP_ZONE_MAX_Y = 400; //mm from center of robot
+        // find the nearest object to the robot
+        float weighted_obj_center_y = obj_center.y;
+        if(fabs(weighted_obj_center_y) > PICKUP_ZONE_MAX_Y)
+          weighted_obj_center_y *= 2.0; // penalize objects too far to the side (prefer objects ahead)
+         
+        float weighted_distance = sqrt(pow(obj_center.x,2) + pow(weighted_obj_center_y,2));
+        if(weighted_distance < nearest_object_weighted_distance)
+        {
+          // New Nearest Object
+          nearest_object_weighted_distance = weighted_distance;
+          nearest_object_index = j;
+          nearest_object_cloud_msg = cloud_rotated_msg;
+          nearest_obj_minPt = minPt;
+          nearest_obj_maxPt = maxPt; 
+          nearest_obj_bb_size = bb_size; 
+          nearest_obj_center =  obj_center;                
+        }
+         
+        if(j < 5)
+        {
+          if(j == 0)
+          {
+            pub_cluster0.publish (cloud_rotated_msg);   // Publish the data cluster cloud
+            /*
+            PclObjectDetection::PublishMarkerBox(       // Publish the bounding box as a marker
+              target_frame_,                       // Transform Frame from camera to robot base
+              j,                                        // Marker ID
+              obj_center.x, obj_center.y, obj_center.z, // Object Center 
+              bb_size.x, bb_size.y, bb_size.z,          // Object Size
+              1.0, 0.0, 0.0 ); // Red
+            */                   // r,g,b - different for each marker
+          }
+          else if(j == 1)
+          {
+            pub_cluster1.publish (cloud_rotated_msg); 
+
+            /*
+            PclObjectDetection::PublishMarkerBox(     
+              target_frame_,    
+              j, 
+              obj_center.x, obj_center.y, obj_center.z,   
+              bb_size.x, bb_size.y, bb_size.z,            
+              0.5, 0.0, 0.5 ); // Dark Purple
+            */
+          }
+          else if(j == 2)
+          {
+            pub_cluster2.publish (cloud_rotated_msg); 
+
+            /*
+            PclObjectDetection::PublishMarkerBox(     
+              target_frame_,    
+              j, 
+              obj_center.x, obj_center.y, obj_center.z,   
+              bb_size.x, bb_size.y, bb_size.z,            
+              1.0, 0.0, 1.0 ); // Light Purple
+            */
+          }
+          else if(j == 3)
+          {
+            pub_cluster3.publish (cloud_rotated_msg); 
+
+            /*
+            PclObjectDetection::PublishMarkerBox(     
+              target_frame_,    
+              j, 
+              obj_center.x, obj_center.y, obj_center.z,   
+              bb_size.x, bb_size.y, bb_size.z,            
+              1.0, 1.0, 0.0 ); // Yellow
+            */
+          }
+          else if(j == 4)
+          {
+            pub_cluster4.publish (cloud_rotated_msg); 
+
+            /*
+            PclObjectDetection::PublishMarkerBox(     
+              target_frame_,    
+              j, 
+              obj_center.x, obj_center.y, obj_center.z,   
+              bb_size.x, bb_size.y, bb_size.z,            
+              0.0, 1.0, 1.0 ); // Aqua
+            */
+          }
+        }       
+            
+      }
+      catch (tf2::TransformException &ex)
+      {
+        ROS_WARN_STREAM("Transform failure: " << ex.what());
+        break;
+      }
+      
+      ++j;
     }
+    
+    // Publish the nearest object found in front of the robot
+    if(-1 != nearest_object_index)
+    {
+    
+      pub_nearest_object.publish (nearest_object_cloud_msg);
+
+
+      PclObjectDetection::PublishMarkerBox(     
+        target_frame_,    
+        10, 
+        nearest_obj_center.x, nearest_obj_center.y, nearest_obj_center.z,   
+        nearest_obj_bb_size.x, nearest_obj_bb_size.y, nearest_obj_bb_size.z,            
+        0.0, 1.0, 0.0 ); // Green
+
+        std::cout << "NEAREST OBJECT: index: " 
+          << nearest_object_index
+          << ",  Center x: " << nearest_obj_center.x
+          << ", y: " << nearest_obj_center.y 
+          << ", z: " << nearest_obj_center.z               
+          << std::endl
+          << "  Bounding Box l: " << nearest_obj_bb_size.x 
+          << ", w: " << nearest_obj_bb_size.y 
+          << ", h: " << nearest_obj_bb_size.z 
+          << ",   top: " << nearest_obj_maxPt.z 
+          << ", bottom: " << nearest_obj_minPt.z 
+          << std::endl;
+    }
+
   }
   
 } // cloud_cb
