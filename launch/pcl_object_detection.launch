@@ -7,8 +7,14 @@
 
     <param name="target_frame" value="base_link"/>
     <param name="transform_tolerance" value="0.01"/>
+
+    <!-- PICK WHICH CAMERA TO USE:
+    ASTRA CAMERA:
+    <param name="depth_topic" value="/astra_camera/depth/points"/>
+    REALSENSE CAMERA IN HEAD:
     <param name="depth_topic" value="/camera/depth_cloud"/>
-  
+    -->
+    <param name="depth_topic" value="/astra_camera/depth/points"/>
  
   </node>
 

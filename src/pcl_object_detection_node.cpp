@@ -239,9 +239,9 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
     // Plane equation:  ax + by +cz + d = 0
     /*
     std::cerr << "Plane " << i << " coefficients: " 
-      << coefficients->values[0] << " x " 
-      << coefficients->values[1] << " y "
-      << coefficients->values[2] << " z " 
+      << coefficients->values[0] << " x + " 
+      << coefficients->values[1] << " y + "
+      << coefficients->values[2] << " z + " 
       << coefficients->values[3] << " d "<< std::endl;
     */    
     
@@ -458,30 +458,40 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
           << ", bottom: " << minPt.z; 
         */                            
           
+        // TODO DAVES:  instead of bb size, try using min and max values
+        // need to fix ground plane to auto-adjust so it sits on the ground.
+        // for close up objects just see the top of the object, so it has small
+        // height from bottom to top, but big height from floor.
 
-        if(bb_size.z < 0.020)
-        {
-          std::cout << " FAIL: Object too short" << std::endl;
-          ++j;
-          continue;
-        }
-        else if(bb_size.z > 0.090)
+        if(maxPt.z > 0.120)
         {
           std::cout << " FAIL: Object too tall" << std::endl;
           ++j;
           continue;
         }
-        /*
-        else if(minPt.z > 0.070)
+        else if(bb_size.z < 0.020)
         {
-          std::cout << " FAIL: Bottom of Object too high" << std::endl;
+          //std::cout << " FAIL: Object too short" << std::endl;
+          ++j;
+          continue;
+        }
+        else if(bb_size.z > 0.090)
+        {
+          //std::cout << " FAIL: Object too tall.  " << std::endl;
+          ++j;
+          continue;
+        }
+        /*
+        else if(minPt.z > 0.12)
+        {
+          std::cout << " FAIL: Bottom of Object too high.  min Z = " << minPt.z << std::endl;
           ++j;
           continue;
         }
         */
         
 
-        std::cout << " PASS" << std::endl;
+        //std::cout << " PASS" << std::endl;
         const int PICKUP_ZONE_MAX_Y = 400; //mm from center of robot
         // find the nearest object to the robot
         float weighted_obj_center_y = obj_center.y;
@@ -602,8 +612,10 @@ void PclObjectDetection::cloud_cb (const sensor_msgs::PointCloud2ConstPtr& input
           << "  Bounding Box l: " << nearest_obj_bb_size.x 
           << ", w: " << nearest_obj_bb_size.y 
           << ", h: " << nearest_obj_bb_size.z 
-          << ",   top: " << nearest_obj_maxPt.z 
-          << ", bottom: " << nearest_obj_minPt.z 
+          << ",   minPt.x: " << nearest_obj_minPt.x 
+          << ", maxPt.x: " << nearest_obj_maxPt.x 
+          << ", minPt.z: " << nearest_obj_minPt.z 
+          << ", maxPt.z: " << nearest_obj_maxPt.z 
           << std::endl;
     }
 
